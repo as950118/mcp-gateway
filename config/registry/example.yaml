@@ -1,0 +1,54 @@
+# 레지스트리 예시 (eval/upstream_tools.snapshot.example.json 의 가상 도구 기준)
+#
+# 실제 upstream 용 레지스트리는 config/registry/<upstream>.yaml 로 만들고 커밋하지 않는다.
+#
+# side_effect 는 upstream 코드를 읽고 정하고, 근거를 주석으로 남긴다.
+#   read     조회만 함
+#   write    로컬 파일을 만든다
+#   exec     명령을 실행한다 (SSH, subprocess)
+#   external 외부 시스템 상태를 바꾼다
+#
+# examples 는 검색 인덱스에 들어간다. 평가셋 질의를 그대로 옮기지 않는다 (평가 오염).
+
+tools:
+  get_project_info:
+    domain: workflow
+    side_effect: read
+    core: true
+    tags: [project, language, 프로젝트, 언어, 시작]
+    examples: ["작업 시작 전에 프로젝트 정보 등록"]
+  list_db_tables:
+    domain: database
+    side_effect: read
+    tags: [db, database, mysql, table, 테이블, 목록]
+    examples: ["DB 테이블 뭐 있는지 보여줘"]
+  get_table_columns:
+    domain: database
+    side_effect: read
+    tags: [db, database, mysql, column, 컬럼, 필드, 타입]
+    examples: ["테이블 컬럼 구조 확인"]
+  list_pods:
+    domain: k8s
+    side_effect: exec          # SSH 로 kubectl get pods 실행
+    tags: [k8s, kubernetes, 쿠버네티스, kubectl, pod, 파드, 상태]
+    examples: ["클러스터 파드 목록 확인"]
+  get_pod_logs:
+    domain: k8s
+    side_effect: exec          # SSH 로 kubectl logs 실행
+    tags: [k8s, kubernetes, 쿠버네티스, pod, 파드, log, 로그]
+    examples: ["파드 로그 마지막 100줄"]
+  generate_api_docs:
+    domain: openapi
+    side_effect: read          # 소스를 읽어 문서 문자열 반환
+    tags: [openapi, swagger, 스웨거, api, 문서, spring, gin]
+    examples: ["컨트롤러 코드로 API 문서 뽑아줘"]
+  scaffold_frontend_entity:
+    domain: frontend
+    side_effect: write         # 디렉터리·파일 생성
+    tags: [frontend, 프론트엔드, entity, 엔티티, scaffold, 스캐폴딩, 뼈대]
+    examples: ["엔티티 하나 목록·상세 화면 뼈대 생성"]
+  create_pull_request:
+    domain: git
+    side_effect: external      # 커밋 + 원격 저장소에 PR 생성
+    tags: [pr, pull, request, commit, 커밋, 머지요청, 올리기]
+    examples: ["변경사항 커밋하고 PR 올려줘"]

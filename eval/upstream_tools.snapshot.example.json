@@ -1,0 +1,10 @@
+[
+ {"name": "get_project_info", "description": "프로젝트 메타 정보 전달용 Tool\nArgs:\n    project_root: 프로젝트 루트 경로\n    language: 프로젝트 언어", "parameters": {"type": "object", "properties": {"project_root": {"type": "string"}, "language": {"type": "string"}}}},
+ {"name": "list_db_tables", "description": "지정된 스키마의 모든 테이블 목록을 조회하는 Tool\nArgs:\n    schema_name: 스키마 이름", "parameters": {"type": "object", "properties": {"schema_name": {"type": "string"}}}},
+ {"name": "get_table_columns", "description": "지정된 테이블의 컬럼 정보를 조회하는 Tool\nArgs:\n    schema_name: 스키마 이름\n    table_name: 테이블 이름", "parameters": {"type": "object", "properties": {"schema_name": {"type": "string"}, "table_name": {"type": "string"}}}},
+ {"name": "list_pods", "description": "SSH 접속 후 kubectl get po 명령어를 실행하는 도구\nArgs:\n    cluster_name: 클러스터 이름\n    namespace: 네임스페이스", "parameters": {"type": "object", "properties": {"cluster_name": {"type": "string"}, "namespace": {"type": "string"}}}},
+ {"name": "get_pod_logs", "description": "지정된 파드의 로그를 조회하는 도구\nArgs:\n    namespace: 네임스페이스\n    pod_name: 파드 이름\n    tail_lines: 조회할 로그 라인 수", "parameters": {"type": "object", "properties": {"namespace": {"type": "string"}, "pod_name": {"type": "string"}, "tail_lines": {"type": "integer"}}}},
+ {"name": "generate_api_docs", "description": "프로젝트 소스에서 OpenAPI/Swagger 문서 자동 생성\nArgs:\n    project_path: 프로젝트 루트 경로\n    output_format: yaml 또는 json", "parameters": {"type": "object", "properties": {"project_path": {"type": "string"}, "output_format": {"type": "string"}}}},
+ {"name": "scaffold_frontend_entity", "description": "사용자 지정 엔티티로 프론트엔드 구조 생성 (목록/상세만)\nArgs:\n    entity_name: 엔티티 이름\n    api_path: API 경로", "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}, "api_path": {"type": "string"}}}},
+ {"name": "create_pull_request", "description": "Repository에 Pull Request 생성 Tool (커밋 포함)\nArgs:\n    title: PR 제목\n    target_branch: 타겟 브랜치", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "target_branch": {"type": "string"}}}}
+]

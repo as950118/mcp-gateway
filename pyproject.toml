@@ -1,0 +1,32 @@
+[project]
+name = "satc-mcp-gateway"
+version = "0.1.0"
+description = "SATC MCP Gateway - Tool Registry, 도구 검색, 실행 정책(감사·타임아웃·차단)을 upstream MCP 서버 앞단에서 처리"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # satc-mcp-server 와 같은 버전으로 고정 (프록시·미들웨어 동작을 이 버전 기준으로 검증함)
+    "fastmcp==2.11.3",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+satc-mcp-gateway = "satc_gateway.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/satc_gateway"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
