@@ -1,0 +1,32 @@
+[project]
+name = "satc-idp"
+version = "0.1.0"
+description = "satc-mcp-gateway 용 최소 OAuth 2.1 인가 서버 (client_credentials, authorization_code + PKCE, refresh rotation)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "starlette==1.8.0",
+    "uvicorn==0.54.0",
+    "python-multipart==0.0.32",
+    "joserfc==1.7.5",
+    "argon2-cffi==25.1.0",
+    "pyyaml==6.0.3",
+    "pydantic==2.14.1",
+]
+
+[project.scripts]
+satc-idp = "satc_idp.cli:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "httpx==0.28.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/satc_idp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]

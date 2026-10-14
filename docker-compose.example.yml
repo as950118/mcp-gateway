@@ -6,6 +6,14 @@
 #   docker compose up -d --build
 #
 # 클라이언트는 http://<host>:5600/mcp 에 "Authorization: Bearer <token>" 으로 접속한다.
+#
+# satc-idp(JWT) 를 쓸 때 (아래 idp 서비스):
+#   cp idp/config/idp.example.yaml idp/config/idp.yaml    # issuer = IdP 외부 URL(https), allowed_audiences = 게이트웨이 외부 MCP URL
+#   gateway.yaml 의 auth: mode: jwt, issuer = IdP 외부 URL, resource_url = 게이트웨이 외부 MCP URL,
+#     jwks_uri 는 컨테이너 네트워크 주소(http://idp:5700/.well-known/jwks.json) 를 써도 된다 (iss 는 외부 URL 과 일치해야 함)
+#   이 경우 gateway 서비스의 GATEWAY_TOKENS 는 필요 없다
+#   docker compose run --rm idp satc-idp users add alice     # 비밀번호 프롬프트
+#   운영에서는 TLS 리버스 프록시 뒤에 두고 idp.yaml 의 forwarded_allow_ips 에 프록시 IP 를 넣는다
 
 services:
   # 게이트웨이 뒤에 둘 MCP 서버 (streamable-http). 실제 이미지·포트로 바꾼다
@@ -34,5 +42,17 @@ services:
       - gateway-logs:/app/logs
     restart: unless-stopped
 
+  # OAuth 2.1 인가 서버 (idp/). gateway auth.mode: jwt 일 때만 필요
+  idp:
+    build: ./idp
+    image: satc-idp:latest
+    ports:
+      - "5700:5700"
+    volumes:
+      - ./idp/config:/app/config:ro
+      - idp-data:/app/data          # DB·서명 키·감사 로그
+    restart: unless-stopped
+
 volumes:
   gateway-logs:
+  idp-data:

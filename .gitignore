@@ -5,7 +5,8 @@ __pycache__/
 logs/
 
 # 사내 upstream 정보가 들어가는 실제 설정·평가 데이터 (예시 파일만 커밋)
-config/gateway.yaml
+config/gateway*.yaml
+!config/gateway.example.yaml
 config/registry/*.yaml
 !config/registry/example.yaml
 eval/*

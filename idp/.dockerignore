@@ -1,0 +1,9 @@
+.venv
+.pytest_cache
+**/__pycache__
+*.pyc
+# 설정·DB·키·감사 로그는 실행 시 마운트한다
+config
+data
+tests
+Dockerfile

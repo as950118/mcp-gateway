@@ -19,6 +19,64 @@ satc-mcp-gateway ── Audit ─> Exposure ─> Policy ─> mount(proxy) ──
                      search_tools / activate_tools
 ```
 
+## 저장소 구성
+
+| 경로 | 내용 |
+|---|---|
+| `/` (루트) | 게이트웨이 (`src/satc_gateway`, 패키지·CLI `satc-mcp-gateway`) |
+| `idp/` | OAuth 2.1 인가 서버 `satc-idp`. 게이트웨이 `auth.mode: jwt` 가 검증할 access token 을 발급한다. 자세한 내용은 [idp/README.md](idp/README.md) |
+
+두 프로젝트는 각자 `pyproject.toml`·`uv.lock`·`.venv` 를 가진다 (`uv sync` 를 각 디렉터리에서).
+
+### gateway + idp 로컬 실행
+
+로컬 http(loopback) 로 IdP 와 게이트웨이를 함께 띄워 MCP 인가 디스커버리까지 확인하는 최소 순서.
+`config/idp.yaml`, `config/gateway*.yaml`(example 제외), `idp/data/`, `logs/` 는 커밋되지 않는다.
+
+```bash
+# 1) IdP (idp/ 에서)
+cd idp && uv sync
+cat > config/idp.yaml <<'YAML'
+issuer: http://127.0.0.1:5700
+db_path: ../data/idp.sqlite3
+keystore_dir: ../data/keys
+audit_path: ../data/audit.jsonl
+allowed_audiences: [http://127.0.0.1:5600/mcp]
+scopes: [mcp]
+cookie_secure: false        # loopback issuer 에서만 허용
+dcr: {enabled: true}        # MCP 클라이언트(Claude Code 등)가 스스로 등록
+YAML
+.venv/bin/satc-idp keys rotate
+.venv/bin/satc-idp users add alice          # 비밀번호 프롬프트 (12자 이상)
+.venv/bin/satc-idp serve --port 5700 &
+cd ..
+
+# 2) 게이트웨이 (루트에서). 기존 config/gateway.yaml 을 덮어쓰지 않도록 별도 파일
+uv sync
+cat > config/gateway.oauth-local.yaml <<'YAML'
+upstreams:
+  - name: my-mcp-server
+    url: ${SATC_MCP_SERVER_URL:-http://localhost:5555/mcp}
+auth:
+  mode: jwt
+  jwks_uri: http://127.0.0.1:5700/.well-known/jwks.json
+  issuer: http://127.0.0.1:5700
+  resource_url: http://127.0.0.1:5600/mcp
+  required_scopes: [mcp]
+audit:
+  path: ../logs/audit.jsonl
+YAML
+.venv/bin/satc-mcp-gateway serve -c config/gateway.oauth-local.yaml --transport http --port 5600 &
+
+# 3) 확인
+curl -s http://127.0.0.1:5700/.well-known/oauth-authorization-server     # issuer, registration_endpoint, S256
+curl -s http://127.0.0.1:5600/.well-known/oauth-protected-resource/mcp   # resource, authorization_servers
+curl -si -X POST http://127.0.0.1:5600/mcp | grep -i www-authenticate      # 401 + resource_metadata
+```
+
+이후 MCP 클라이언트를 `http://127.0.0.1:5600/mcp` 에 연결하면 401 → 디스커버리 → 등록 → 브라우저 로그인 순서로 진행된다
+(대화형 클라이언트의 브라우저 로그인 단계는 아직 사람이 확인하지 않았다. 아래 검증 현황 참고).
+
 ## 실행
 
 ```bash
@@ -79,7 +137,7 @@ policy:
   side_effects: {external: confirm}     # 예: PR 생성처럼 외부 상태를 바꾸는 도구는 확인받기
   confirm_tools: [some_exec_tool]       # 도구 단위로도 지정 가능
 ```
-- `audit.path`: JSON Lines 감사 로그. `password`·`token`·`secret` 등이 들어간 인자 키는 `***` 로 가린다
+- `audit.path`: JSON Lines 감사 로그. `password`·`token`·`secret` 등이 들어간 인자 키는 `***` 로 가린다. 파일은 소유자만 읽을 수 있게(0600) 만들고, 게이트웨이가 디렉터리를 만들 때는 0700. 예전 버전이 만든 0644 파일은 기동 시 0600 으로 좁힌다
 - `registry_ttl_s`: upstream 도구 목록을 다시 읽는 주기
 
 ### 인증 (`auth`, HTTP 전용)
@@ -173,6 +231,18 @@ docker run -d -p 5600:5600 \
 - `OPENSSL_armcap=0` 이 기본으로 들어 있다. Apple M4 의 Docker(arm64)에서 OpenSSL 이 CPU 기능을 잘못 감지해 `cryptography` import 때 SIGILL(exit 132)로 죽는 문제를 피한다. x86 에서는 무시되고, ARM 서버에서 OpenSSL 가속이 필요하면 `-e OPENSSL_armcap=` 로 끈다.
 - Docker Desktop(macOS)은 공유되지 않은 경로(예: `/private/tmp`)를 빈 디렉터리로 마운트한다. 설정은 공유된 경로(`/Users/...`)에 둔다.
 
+IdP 이미지 (`idp/` 를 컨텍스트로 따로 빌드):
+
+```bash
+cp idp/config/idp.example.yaml idp/config/idp.yaml      # issuer(https), allowed_audiences 수정
+docker build -t satc-idp idp
+docker run -d -p 5700:5700 -v "$PWD/idp/config:/app/config:ro" -v idp-data:/app/data satc-idp
+docker exec -it <컨테이너> satc-idp users add alice
+```
+
+- non-root(`idp`, uid 10002), DB·서명 키·감사 로그는 `/app/data` 볼륨(디렉터리 700, 파일 600). 키는 첫 기동 때 자동 생성된다.
+- 2026-10-14 arm64(Docker 27.4)에서 빌드·실행 확인: healthy, 실행 사용자 `idp`, discovery·JWKS 200, `users add` 동작. x86 미확인.
+
 ## 커밋하지 않는 파일
 
 사내 upstream 의 도구 목록·이름이 드러나는 파일은 `.gitignore` 로 빼고, 같은 형식의 예시만 커밋한다.
@@ -256,9 +326,14 @@ docker run -d -p 5600:5600 \
   - client_credentials: IdP `/token` 200 (`expires_in` 900, `scope` mcp) → 도구 31개 조회, `get_style_tag_config` 호출 성공, 감사 로그 `client: ci-bot`.
   - 디스커버리 전 과정 (httpx 스크립트): 토큰 없이 `POST /mcp` → 401 + `resource_metadata=".../.well-known/oauth-protected-resource/mcp"` → PRM 200 → IdP 메타데이터 200 → DCR 201 → `/authorize` 로그인 폼 → 303 (state·`iss` 일치) → `/token` 200 (`aud=.../mcp`, refresh 발급) → 게이트웨이 도구 31개·호출 성공. 감사 로그 `client: <dcr client_id> (<사용자 id>)`.
   - mcp SDK `OAuthClientProvider` (브라우저 단계만 스크립트로 대체): PRM·AS 메타데이터·DCR·PKCE·토큰 교환을 SDK 가 직접 수행해 도구 31개·호출 성공. `resource=http://127.0.0.1:5600/mcp`.
-  - Claude Code 2.1.296 (`--strict-mcp-config`, HTTP): bearer 헤더(client_credentials 토큰)로 도구 호출 성공. 토큰 없이 연결하면 서버 상태 `needs-auth` (401 인가 요구를 인식).
+  - Claude Code 2.1.296 (`--strict-mcp-config`, HTTP, 2.1.299 에서도 `needs-auth` 재확인): bearer 헤더(client_credentials 토큰)로 도구 호출 성공. 토큰 없이 연결하면 서버 상태 `needs-auth` (401 인가 요구를 인식).
   - 로그(게이트웨이·IdP·감사)에서 client secret·비밀번호·JWT 문자열 0건.
-- 단위 테스트 42개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·확인(승인/거절/취소/미지원 fallback)·타임아웃·감사·세션 분리·prefix 를 검증한다. 인증은 게이트웨이를 uvicorn 으로 띄워 정적 토큰(성공/없음/틀림 → 401)·JWT(fastmcp `RSAKeyPair` 로 발급, 잘못된 audience·다른 키 → 401)·감사 `client`·노출 가드를 검증한다. `test_oauth.py` 는 IdP 와 같은 모양의 토큰(`typ=at+jwt`, kid, RS256)과 HTTP 로 내려주는 JWKS 로 성공·잘못된 aud/iss·만료·다른 키·스코프 없음·`alg=none` → 401, 401 의 `resource_metadata` 와 PRM 문서를 검증한다 (RFC 9728 경로 보정을 끄면 실패). 정책 차단·노출 필터·확인 절차·인증 provider 를 일부러 끄면 해당 테스트가 실패하는 것도 확인했다.
+- **satc-idp 2차 보안 수정 뒤 재확인 (2026-10-14)**: IdP 설정을 `dcr: {enabled: true}` 만 두고(redirect 허용 목록 없이) 같은 E2E 를 다시 돌렸다.
+  - client_credentials → 도구 31개, 호출 성공, 감사 로그 `client: ci-bot`.
+  - Claude Code 가 쓰는 형식 `http://localhost:53682/callback` 으로 DCR 201 (scope `mcp`) → 로그인 303 → 토큰 → 게이트웨이 호출 성공. 같은 코드 재사용 400, 잘못된 토큰 401.
+  - mcp SDK `OAuthClientProvider` → 도구 31개, 호출 성공.
+  - 게이트웨이 감사 로그 파일 권한 600. 로그·감사 로그에 secret·비밀번호·JWT 문자열 0건.
+- 단위 테스트 44개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·확인(승인/거절/취소/미지원 fallback)·타임아웃·감사·세션 분리·prefix 를 검증한다. 인증은 게이트웨이를 uvicorn 으로 띄워 정적 토큰(성공/없음/틀림 → 401)·JWT(fastmcp `RSAKeyPair` 로 발급, 잘못된 audience·다른 키 → 401)·감사 `client`·노출 가드를 검증한다. 감사 로그 파일 0600·디렉터리 0700·기존 0644 파일 좁히기도 검증한다. `test_oauth.py` 는 IdP 와 같은 모양의 토큰(`typ=at+jwt`, kid, RS256)과 HTTP 로 내려주는 JWKS 로 성공·잘못된 aud/iss·만료·다른 키·스코프 없음·`alg=none` → 401, 401 의 `resource_metadata` 와 PRM 문서를 검증한다 (RFC 9728 경로 보정을 끄면 실패). 정책 차단·노출 필터·확인 절차·인증 provider 를 일부러 끄면 해당 테스트가 실패하는 것도 확인했다.
 
 **부분 실증**
 - Claude Code `confirm` (2026-10-14): Claude Code 는 elicitation 지원을 광고하고, 게이트웨이의 확인 요청을 받는다. headless(`-p`) 에서는 응답할 사람이 없어 `cancel` 로 돌아오고 도구는 실행되지 않는다 (안전하게 실패). 대화형 세션에서 사용자가 승인하는 흐름은 아직 확인하지 않았다.
