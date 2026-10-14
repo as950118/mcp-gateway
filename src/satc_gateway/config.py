@@ -108,9 +108,15 @@ class AuthConfig(BaseModel):
     jwks_uri: Optional[str] = None
     public_key_env: Optional[str] = None
     issuer: Optional[str] = None
+    # 없으면 resource_url 을 audience 로 쓴다 (IdP 는 RFC 8707 resource 를 aud 로 넣는다)
     audience: Optional[str] = None
     algorithm: str = "RS256"
     required_scopes: List[str] = Field(default_factory=list)
+    # MCP 인가 디스커버리 (RFC 9728). 게이트웨이 MCP 엔드포인트의 외부 URL (예: https://gw.example.com/mcp)
+    # 지정하면 /.well-known/oauth-protected-resource 를 열고, 401 응답에 resource_metadata 를 싣는다
+    resource_url: Optional[str] = None
+    # 토큰을 발급하는 인가 서버 (IdP issuer). 없으면 [issuer]
+    authorization_servers: List[str] = Field(default_factory=list)
 
 
 class GatewayConfig(BaseModel):
@@ -145,9 +151,11 @@ def load_config(path: str | os.PathLike) -> GatewayConfig:
         if "url" in upstream:
             upstream["url"] = expand_env(upstream["url"])
     auth = raw.get("auth") or {}
-    for key in ("jwks_uri", "issuer", "audience"):
+    for key in ("jwks_uri", "issuer", "audience", "resource_url"):
         if isinstance(auth.get(key), str):
             auth[key] = expand_env(auth[key]) or None
+    if isinstance(auth.get("authorization_servers"), list):
+        auth["authorization_servers"] = [expand_env(v) for v in auth["authorization_servers"] if expand_env(v)]
     config = GatewayConfig.model_validate(raw)
     config.base_dir = config_path.parent
     return config

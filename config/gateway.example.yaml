@@ -47,11 +47,15 @@ auth:
   # static_tokens: "client_id:token,client_id:token" 를 담은 환경변수
   tokens_env: GATEWAY_TOKENS
   # jwt: jwks_uri 또는 public_key_env(PEM 공개키를 담은 환경변수 이름)
-  # jwks_uri: ${GATEWAY_JWKS_URI}
+  # jwks_uri: ${GATEWAY_JWKS_URI:-https://idp.example.com/.well-known/jwks.json}
   # public_key_env: GATEWAY_JWT_PUBLIC_KEY
   # issuer: https://idp.example.com
-  # audience: mcp-gateway
+  # 게이트웨이 MCP 엔드포인트의 외부 URL. 지정하면 MCP 인가 디스커버리(RFC 9728)를 열고 aud 로 검증한다
+  # resource_url: https://gateway.example.com/mcp
+  # authorization_servers: [https://idp.example.com]   # 없으면 [issuer]
+  # audience: https://gateway.example.com/mcp           # 없으면 resource_url
   # algorithm: RS256
+  # jwt 모드에서는 [mcp] 권장 (satc-idp 기본 스코프)
   required_scopes: []
 
 audit:

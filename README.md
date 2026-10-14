@@ -88,7 +88,7 @@ policy:
 |---|---|---|
 | `none` (기본) | 인증 없음. loopback(127.0.0.1, localhost, ::1) 이 아닌 주소로 HTTP 를 열면 기동을 거부한다 (`allow_unauthenticated: true` 로 해제) | - |
 | `static_tokens` | `Authorization: Bearer <token>` 을 정적 토큰 목록과 대조 (fastmcp `StaticTokenVerifier`) | 환경변수 `GATEWAY_TOKENS="alice:<token>,ci-bot:<token>"` (`tokens_env` 로 이름 변경) |
-| `jwt` | 외부 IdP 가 발급한 JWT 를 검증 (fastmcp `JWTVerifier`) | `jwks_uri` 또는 `public_key_env`(PEM 공개키 환경변수 이름), `issuer`, `audience`, `algorithm`(기본 RS256) |
+| `jwt` | 외부 IdP 가 발급한 JWT 를 검증 (fastmcp `JWTVerifier`) | `jwks_uri` 또는 `public_key_env`(PEM 공개키 환경변수 이름), `issuer`, `audience`(없으면 `resource_url`), `algorithm`(기본 RS256) |
 
 ```yaml
 auth:
@@ -104,12 +104,43 @@ auth:
 - 감사 로그 `client` 필드에 호출자가 남는다 (정적 토큰은 client_id, JWT 는 `client_id` 또는 `sub`). 토큰 값은 남기지 않는다.
 - `GET /health` 는 인증 없이 열려 있고 `{"status":"ok"}` 만 돌려준다 (컨테이너 헬스체크용).
 - fastmcp 문서는 `StaticTokenVerifier` 를 개발·테스트용으로 안내한다. 팀 공용 운영에는 `jwt` 를 권장한다.
-- 클라이언트 설정 형식 예 (Claude Code `.mcp.json`, 실제 클라이언트에서 토큰 접속은 아직 확인하지 않았다):
+- 클라이언트 설정 형식 예 (Claude Code `.mcp.json`, 고정 bearer 토큰. 2026-10-14 Claude Code 2.1.296 에서 확인):
 
   ```json
   { "mcpServers": { "satc": { "type": "http", "url": "https://gateway.example.com/mcp",
       "headers": { "Authorization": "Bearer ${SATC_GATEWAY_TOKEN}" } } } }
   ```
+
+### OAuth 연동 (satc-idp) 과 MCP 인가 디스커버리
+
+satc-idp(별도 프로젝트) 같은 OAuth 2.1 인가 서버가 발급한 JWT 로 게이트웨이를 보호한다. `resource_url` 을 주면 MCP 클라이언트가 스스로 인가 서버를 찾아 로그인할 수 있다 (MCP 인가 스펙, RFC 9728).
+
+```yaml
+auth:
+  mode: jwt
+  jwks_uri: https://idp.example.com/.well-known/jwks.json
+  issuer: https://idp.example.com
+  # 게이트웨이 MCP 엔드포인트의 외부 URL. 토큰 aud 도 이 값으로 검증한다 (audience 를 따로 주지 않으면)
+  resource_url: https://gateway.example.com/mcp
+  # authorization_servers: [https://idp.example.com]   # 없으면 [issuer]
+  required_scopes: [mcp]
+```
+
+```
+MCP 클라이언트 ── POST /mcp (토큰 없음) ──> 401  WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"
+               ── GET  PRM ──> {"resource": ".../mcp", "authorization_servers": ["https://idp.example.com/"], "scopes_supported": ["mcp"]}
+               ── GET  IdP /.well-known/oauth-authorization-server
+               ── POST IdP /register (동적 등록, IdP 에서 켰을 때) → /authorize (PKCE, 로그인) → /token (resource=.../mcp)
+               ── POST /mcp  Authorization: Bearer <JWT aud=.../mcp>
+```
+
+- **스코프**: 게이트웨이 접근은 `mcp` 하나로 둔다 (`required_scopes`). 도구 단위 권한은 스코프가 아니라 게이트웨이 정책(`policy`)이 맡는다. IdP 는 `mcp` 를 기본 스코프로 발급한다.
+- **audience**: IdP 는 RFC 8707 `resource` 값을 `aud` 로 넣는다. IdP 의 `allowed_audiences` 에 `resource_url` 과 같은 값을 넣는다.
+- 감사 로그 `client`: client_credentials 는 `ci-bot`, 사용자 로그인은 `<client_id> (<사용자 id>)`.
+- PRM 문서는 `/.well-known/oauth-protected-resource/mcp`(RFC 9728 경로)와 `/.well-known/oauth-protected-resource` 두 곳에서 같은 내용을 준다.
+- **fastmcp 2.11.3 보정**: 401 의 `resource_metadata` 를 fastmcp 는 `{resource}/.well-known/oauth-protected-resource` 로 알리지만 문서는 RFC 9728 경로에 등록돼 404 가 된다. 게이트웨이는 알리는 주소를 등록 경로에 맞춘다 (`auth.py` `ProtectedResourceAuth`).
+- mcp SDK 가 `authorization_servers` 를 직렬화하며 끝에 `/` 를 붙인다 (`https://idp.example.com/`). mcp SDK 클라이언트는 문제없이 처리했다. 다른 클라이언트에서 issuer 비교가 실패하면 이 점을 먼저 본다.
+- **클라이언트 호환**: mcp SDK `OAuthClientProvider` 에 MCP URL(`.../mcp`) 을 주면 전 과정이 동작한다. fastmcp 2.11.3 의 `fastmcp.client.auth.OAuth` helper 는 서버 URL 을 origin 으로 잘라 넘겨서, PRM resource(`.../mcp`) 검증에서 `Protected resource ... does not match expected ...` 로 실패한다 (클라이언트 쪽 한계).
 
 ### 부작용 분류 (`side_effect`)
 
@@ -221,7 +252,13 @@ docker run -d -p 5600:5600 \
   - 위 인증 E2E 와 같은 결과 (올바른 토큰 성공·감사 로그 `client: ci-bot`, 토큰 없음·틀린 토큰 401).
   - `auth.mode: none` 설정 컨테이너는 exit 2, 설정 파일이 없으면 "설정 파일이 없습니다" 로그와 함께 종료.
   - 처음 빌드한 이미지는 M4 에서 SIGILL(exit 132)로 죽었고 `OPENSSL_armcap=0` 으로 해결했다.
-- 단위 테스트 32개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·확인(승인/거절/취소/미지원 fallback)·타임아웃·감사·세션 분리·prefix 를 검증한다. 인증은 게이트웨이를 uvicorn 으로 띄워 정적 토큰(성공/없음/틀림 → 401)·JWT(fastmcp `RSAKeyPair` 로 발급, 잘못된 audience·다른 키 → 401)·감사 `client`·노출 가드를 검증한다. 정책 차단·노출 필터·확인 절차·인증 provider 를 일부러 끄면 해당 테스트가 실패하는 것도 확인했다.
+- **satc-idp 연동 E2E (2026-10-14, 로컬 프로세스: upstream 5599, IdP 5700(DCR 켬), 게이트웨이 5600 `auth.mode: jwt` + `resource_url`)**
+  - client_credentials: IdP `/token` 200 (`expires_in` 900, `scope` mcp) → 도구 31개 조회, `get_style_tag_config` 호출 성공, 감사 로그 `client: ci-bot`.
+  - 디스커버리 전 과정 (httpx 스크립트): 토큰 없이 `POST /mcp` → 401 + `resource_metadata=".../.well-known/oauth-protected-resource/mcp"` → PRM 200 → IdP 메타데이터 200 → DCR 201 → `/authorize` 로그인 폼 → 303 (state·`iss` 일치) → `/token` 200 (`aud=.../mcp`, refresh 발급) → 게이트웨이 도구 31개·호출 성공. 감사 로그 `client: <dcr client_id> (<사용자 id>)`.
+  - mcp SDK `OAuthClientProvider` (브라우저 단계만 스크립트로 대체): PRM·AS 메타데이터·DCR·PKCE·토큰 교환을 SDK 가 직접 수행해 도구 31개·호출 성공. `resource=http://127.0.0.1:5600/mcp`.
+  - Claude Code 2.1.296 (`--strict-mcp-config`, HTTP): bearer 헤더(client_credentials 토큰)로 도구 호출 성공. 토큰 없이 연결하면 서버 상태 `needs-auth` (401 인가 요구를 인식).
+  - 로그(게이트웨이·IdP·감사)에서 client secret·비밀번호·JWT 문자열 0건.
+- 단위 테스트 42개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·확인(승인/거절/취소/미지원 fallback)·타임아웃·감사·세션 분리·prefix 를 검증한다. 인증은 게이트웨이를 uvicorn 으로 띄워 정적 토큰(성공/없음/틀림 → 401)·JWT(fastmcp `RSAKeyPair` 로 발급, 잘못된 audience·다른 키 → 401)·감사 `client`·노출 가드를 검증한다. `test_oauth.py` 는 IdP 와 같은 모양의 토큰(`typ=at+jwt`, kid, RS256)과 HTTP 로 내려주는 JWKS 로 성공·잘못된 aud/iss·만료·다른 키·스코프 없음·`alg=none` → 401, 401 의 `resource_metadata` 와 PRM 문서를 검증한다 (RFC 9728 경로 보정을 끄면 실패). 정책 차단·노출 필터·확인 절차·인증 provider 를 일부러 끄면 해당 테스트가 실패하는 것도 확인했다.
 
 **부분 실증**
 - Claude Code `confirm` (2026-10-14): Claude Code 는 elicitation 지원을 광고하고, 게이트웨이의 확인 요청을 받는다. headless(`-p`) 에서는 응답할 사람이 없어 `cancel` 로 돌아오고 도구는 실행되지 않는다 (안전하게 실패). 대화형 세션에서 사용자가 승인하는 흐름은 아직 확인하지 않았다.
@@ -230,17 +267,18 @@ docker run -d -p 5600:5600 \
 **미검증**
 - Cursor 의 `tools/list_changed`·elicitation 지원. Cursor 를 쓰는 환경이면 dynamic·confirm 을 켜기 전에 확인한다.
 - `exec`·`external`·`write` 도구를 게이트웨이를 거쳐 실제로 실행하는 것. 부작용이 있어 E2E 대상에서 뺐다.
-- JWT 를 실제 IdP(JWKS URI)와 연결하는 것. JWT 는 테스트 키쌍으로만 검증했다.
+- Claude Code·Cursor 대화형 OAuth 로그인 (브라우저로 IdP 로그인 → 토큰 저장). headless 에서는 `needs-auth` 까지만 확인했다.
+- 운영 IdP·게이트웨이를 https 로 띄운 구성 (로컬 http 로만 확인).
 - TLS. 게이트웨이는 평문 HTTP 를 연다. 외부에 열 때는 앞단(리버스 프록시·인그레스)에서 TLS 를 종료해야 한다.
 - docker-compose 예시 전체 기동 (upstream 이미지가 placeholder 라 실행해 보지 않았다). 게이트웨이 컨테이너 단독 실행은 실증.
 - x86 서버에서의 이미지 동작 (arm64 에서만 빌드·실행).
-- Claude Code·Cursor 를 HTTP + 토큰으로 게이트웨이에 연결하는 것 (fastmcp Client·httpx 로만 확인).
+- Cursor 를 HTTP + 토큰으로 게이트웨이에 연결하는 것.
 
 **주의**: 게이트웨이는 MCP 도구 호출만 중계한다. upstream 이 MCP 와 별개로 HTTP 엔드포인트(웹훅 등)를 직접 열면, 그 경로는 게이트웨이의 인증·정책·감사를 거치지 않는다. 그런 엔드포인트는 upstream 쪽에서 따로 보호해야 한다.
 
 ## 다음 단계 후보
 
 - Cursor 에서 dynamic 모드·confirm 확인. Claude Code 대화형 세션에서 confirm 승인 흐름 확인.
-- 운영 배포 위치 결정 후 JWT(사내 IdP) 연결, TLS 종료 구성.
+- 운영 배포 위치 결정 후 IdP·게이트웨이 https 구성, 대화형 Claude Code OAuth 로그인 확인.
 - 감사 로그로 도구 사용 빈도와 실패율을 본다. `core` 선정과 레지스트리 보강의 근거로 쓴다.
 - 도구가 50개를 넘거나 여러 서버를 묶으면, 별도 문서 검색 서비스의 하이브리드 색인(BM25 + 임베딩, RRF)을 쓰는 `ToolSearcher` 구현을 추가한다.
