@@ -38,6 +38,22 @@ policy:
     unknown: 120
   tool_timeouts: {}
 
+# HTTP 인증 (stdio 에는 적용하지 않는다). 토큰 값은 여기에 쓰지 않는다
+auth:
+  # none / static_tokens / jwt
+  # none 이면 loopback 이 아닌 주소로 HTTP 를 열 수 없다 (allow_unauthenticated: true 로 해제)
+  mode: none
+  allow_unauthenticated: false
+  # static_tokens: "client_id:token,client_id:token" 를 담은 환경변수
+  tokens_env: GATEWAY_TOKENS
+  # jwt: jwks_uri 또는 public_key_env(PEM 공개키를 담은 환경변수 이름)
+  # jwks_uri: ${GATEWAY_JWKS_URI}
+  # public_key_env: GATEWAY_JWT_PUBLIC_KEY
+  # issuer: https://idp.example.com
+  # audience: mcp-gateway
+  # algorithm: RS256
+  required_scopes: []
+
 audit:
   path: ../logs/audit.jsonl
   max_arg_chars: 500

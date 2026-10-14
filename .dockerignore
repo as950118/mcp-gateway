@@ -1,0 +1,13 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__
+*.pyc
+logs
+# 설정·레지스트리는 실행 시 마운트한다
+config
+eval
+tests
+scripts
+Dockerfile
+docker-compose*.yml

@@ -21,6 +21,7 @@ from fastmcp.server.elicitation import AcceptedElicitation
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool, ToolResult
 
+from .auth import current_client
 from .config import AuditConfig
 from .state import META_TOOLS, GatewayState
 
@@ -130,6 +131,7 @@ class AuditMiddleware(Middleware):
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "session": _session_id(context),
+            "client": current_client(),
             "tool": name,
             "upstream": self.state.upstream_of(name) or ("gateway" if name in META_TOOLS else None),
             "side_effect": "read" if name in META_TOOLS else self.state.side_effect_of(name),

@@ -10,3 +10,6 @@ config/registry/*.yaml
 !config/registry/example.yaml
 eval/*
 !eval/*.example.*
+
+# 실제 배포용 compose (사내 이미지·주소가 들어간다)
+docker-compose.yml

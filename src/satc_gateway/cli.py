@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 
+from .auth import ensure_http_exposure_allowed
 from .config import load_config
 from .server import build_gateway
 
@@ -24,7 +25,8 @@ def main(argv=None) -> None:
 
     serve = sub.add_parser("serve", help="게이트웨이 실행 (기본)")
     serve.add_argument("--transport", default=os.getenv("MCP_TRANSPORT", "stdio"), choices=["stdio", "http"])
-    serve.add_argument("--host", default=os.getenv("GATEWAY_HOST", "0.0.0.0"))
+    # 기본은 loopback. 외부에 열려면 --host 0.0.0.0 + auth 설정 (auth.mode=none 이면 거부)
+    serve.add_argument("--host", default=os.getenv("GATEWAY_HOST", "127.0.0.1"))
     serve.add_argument("--port", type=int, default=int(os.getenv("GATEWAY_PORT", "5600")))
 
     sub.add_parser("check", help="upstream 도구와 레지스트리 대조")
@@ -45,14 +47,31 @@ def main(argv=None) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     command = args.command or "serve"
-    config = load_config(getattr(args, "config", DEFAULT_CONFIG))
-    gateway, state = build_gateway(config)
+    transport = getattr(args, "transport", os.getenv("MCP_TRANSPORT", "stdio"))
+    http = command == "serve" and transport == "http"
+    # 서브커맨드 없이 실행하면 serve 인자가 없다
+    host = getattr(args, "host", os.getenv("GATEWAY_HOST", "127.0.0.1"))
+    port = getattr(args, "port", int(os.getenv("GATEWAY_PORT", "5600")))
+    config_path = getattr(args, "config", DEFAULT_CONFIG)
+    try:
+        config = load_config(config_path)
+    except FileNotFoundError:
+        logging.getLogger("satc_gateway").error("설정 파일이 없습니다: %s (config/gateway.example.yaml 참고)", config_path)
+        sys.exit(2)
+    try:
+        if http:
+            ensure_http_exposure_allowed(config.auth, host)
+        # 인증은 HTTP 에만 적용한다 (stdio·check·search 는 로컬 실행)
+        gateway, state = build_gateway(config, with_auth=http)
+    except ValueError as e:
+        logging.getLogger("satc_gateway").error("%s", e)
+        sys.exit(2)
 
     if command == "serve":
-        if args.transport == "stdio":
-            gateway.run(transport="stdio")
+        if http:
+            gateway.run(transport="streamable-http", host=host, port=port)
         else:
-            gateway.run(transport="streamable-http", host=args.host, port=args.port)
+            gateway.run(transport="stdio")
     elif command == "check":
         asyncio.run(_check(state))
     elif command == "search":

@@ -96,12 +96,30 @@ class AuditConfig(BaseModel):
     )
 
 
+class AuthConfig(BaseModel):
+    """HTTP 인증 (stdio 에는 적용하지 않는다). 토큰 값은 설정 파일에 쓰지 않는다"""
+
+    mode: Literal["none", "static_tokens", "jwt"] = "none"
+    # none 인데 loopback 이 아닌 주소로 HTTP 를 열려면 명시적으로 true
+    allow_unauthenticated: bool = False
+    # static_tokens: "client_id:token,client_id:token" 를 담은 환경변수 이름
+    tokens_env: str = "GATEWAY_TOKENS"
+    # jwt: jwks_uri 또는 public_key_env(PEM 공개키를 담은 환경변수 이름) 중 하나. ${ENV} 치환 지원
+    jwks_uri: Optional[str] = None
+    public_key_env: Optional[str] = None
+    issuer: Optional[str] = None
+    audience: Optional[str] = None
+    algorithm: str = "RS256"
+    required_scopes: List[str] = Field(default_factory=list)
+
+
 class GatewayConfig(BaseModel):
     name: str = "satc-mcp-gateway"
     upstreams: List[UpstreamConfig]
     exposure: ExposureConfig = Field(default_factory=ExposureConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     # upstream 도구 목록을 다시 읽어 레지스트리·검색 인덱스를 갱신하는 주기(초)
     registry_ttl_s: float = 300
     # 설정 파일이 있는 디렉터리 (상대 경로 해석용, 로딩 시 채움)
@@ -126,6 +144,10 @@ def load_config(path: str | os.PathLike) -> GatewayConfig:
     for upstream in raw.get("upstreams", []):
         if "url" in upstream:
             upstream["url"] = expand_env(upstream["url"])
+    auth = raw.get("auth") or {}
+    for key in ("jwks_uri", "issuer", "audience"):
+        if isinstance(auth.get(key), str):
+            auth[key] = expand_env(auth[key]) or None
     config = GatewayConfig.model_validate(raw)
     config.base_dir = config_path.parent
     return config

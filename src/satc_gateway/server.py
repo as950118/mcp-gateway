@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from fastmcp import Context, FastMCP
 
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from .auth import build_auth_provider
 from .config import GatewayConfig
 from .middleware import AuditMiddleware, ExposureMiddleware, PolicyMiddleware
 from .state import GatewayState, Upstream
@@ -24,15 +28,24 @@ SATC MCP Gateway 입니다. 여러 SATC MCP 서버의 도구를 한곳에서 제
 def build_gateway(
     config: GatewayConfig,
     backends: Optional[Dict[str, Any]] = None,
+    with_auth: bool = True,
 ) -> tuple[FastMCP, GatewayState]:
     """설정으로 게이트웨이를 만든다.
 
     backends: upstream 이름 -> 프록시 대상 (테스트에서 FastMCP 인스턴스를 직접 넘길 때 사용).
               없으면 config 의 url 로 연결한다.
+    with_auth: False 면 config.auth 를 무시한다 (stdio 등 로컬 실행)
     """
     backends = backends or {}
     state = GatewayState(config)
-    gateway = FastMCP(name=config.name, instructions=INSTRUCTIONS)
+    # auth=None 을 명시해 fastmcp 환경변수 기반 인증 설정이 끼어들지 않게 한다
+    auth = build_auth_provider(config.auth) if with_auth else None
+    gateway = FastMCP(name=config.name, instructions=INSTRUCTIONS, auth=auth)
+
+    @gateway.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> JSONResponse:
+        # 인증 없이 열려 있다 (fastmcp custom route). 도구 정보는 돌려주지 않는다
+        return JSONResponse({"status": "ok"})
 
     for upstream in config.upstreams:
         proxy = FastMCP.as_proxy(backends.get(upstream.name, upstream.url), name=upstream.name)

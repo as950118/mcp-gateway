@@ -1,0 +1,38 @@
+# docker-compose 예시. docker-compose.yml 로 복사해서 쓴다.
+#
+#   cp docker-compose.example.yml docker-compose.yml
+#   cp config/gateway.example.yaml config/gateway.yaml   # auth.mode: static_tokens 로 변경
+#   export GATEWAY_TOKENS="alice:$(openssl rand -hex 24)"
+#   docker compose up -d --build
+#
+# 클라이언트는 http://<host>:5600/mcp 에 "Authorization: Bearer <token>" 으로 접속한다.
+
+services:
+  # 게이트웨이 뒤에 둘 MCP 서버 (streamable-http). 실제 이미지·포트로 바꾼다
+  upstream:
+    image: your-mcp-server:latest
+    environment:
+      - MCP_TRANSPORT=http
+      - MCP_SERVER_PORT=5555
+    expose:
+      - "5555"
+    restart: unless-stopped
+
+  gateway:
+    build: .
+    image: satc-mcp-gateway:latest
+    depends_on:
+      - upstream
+    ports:
+      - "5600:5600"
+    environment:
+      - SATC_MCP_SERVER_URL=http://upstream:5555/mcp
+      # "client_id:token,client_id:token". 값은 셸 환경변수나 .env 로 넣고 커밋하지 않는다
+      - GATEWAY_TOKENS=${GATEWAY_TOKENS:?GATEWAY_TOKENS 를 설정하세요}
+    volumes:
+      - ./config:/app/config:ro
+      - gateway-logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  gateway-logs:
