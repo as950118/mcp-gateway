@@ -207,3 +207,26 @@ async def test_confirm_wait_not_counted_in_timeout(make_gateway):
     async with Client(gateway, elicitation_handler=slow_accept) as client:
         result = await client.call_tool("get_pod_logs", {})
     assert result.data == "logs of api"
+
+
+async def test_audit_log_file_is_owner_only(make_gateway, tmp_path):
+    import os
+    import stat
+
+    gateway, state = make_gateway(audit={"path": "logs/sub/audit.jsonl"})
+    async with Client(gateway) as client:
+        await client.call_tool("list_db_tables", {"schema_name": "shop"})
+    path = state.config.resolve(state.config.audit.path)
+    # 인자·호출자가 담기므로 소유자만 (0600), 게이트웨이가 만든 디렉터리는 0700
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+
+
+async def test_audit_log_existing_world_readable_file_is_tightened(make_gateway, tmp_path):
+    import os
+    import stat
+
+    (tmp_path / "audit.jsonl").write_text("", encoding="utf-8")
+    os.chmod(tmp_path / "audit.jsonl", 0o644)
+    make_gateway()
+    assert stat.S_IMODE(os.stat(tmp_path / "audit.jsonl").st_mode) == 0o600

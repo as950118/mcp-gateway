@@ -10,6 +10,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,13 +88,23 @@ def _with_annotations(tool: Tool, side_effect: str) -> Tool:
     return tool.model_copy(update={"annotations": mt.ToolAnnotations(**merged)})
 
 
+def _prepare_audit_file(path: Path) -> None:
+    """감사 로그 디렉터리를 준비한다 (우리가 만들 때만 0700, 이미 있는 디렉터리 권한은 건드리지 않는다).
+    파일은 첫 기록 때 0600 으로 만든다. 예전 버전이 0644 로 만든 파일이 있으면 좁힌다"""
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+    if path.exists() and path.stat().st_mode & 0o077:
+        os.chmod(path, 0o600)
+
+
 class AuditMiddleware(Middleware):
     def __init__(self, state: GatewayState, path: Optional[Path]):
         self.state = state
         self.path = path
         self.audit = state.config.audit
         if path is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            _prepare_audit_file(path)
 
     async def on_call_tool(
         self,
@@ -142,7 +153,9 @@ class AuditMiddleware(Middleware):
             "duration_ms": round(duration_ms, 1),
         }
         try:
-            with self.path.open("a", encoding="utf-8") as f:
+            # 인자·호출자가 남으므로 소유자만 읽을 수 있게 만든다 (0600)
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except OSError as e:
             logger.error("감사 로그 기록 실패: %s", e)
