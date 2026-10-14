@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 #   external : 외부 시스템 상태를 바꾼다 (커밋·PR 생성)
 #   unknown  : 레지스트리에 등록되지 않은 도구
 SideEffect = Literal["read", "write", "exec", "external", "unknown"]
-PolicyAction = Literal["allow", "deny"]
+# confirm: 실행 전에 사용자에게 묻는다 (MCP elicitation). 클라이언트가 지원하지 않으면 confirm_fallback
+PolicyAction = Literal["allow", "deny", "confirm"]
 
 
 class UpstreamConfig(BaseModel):
@@ -53,8 +54,11 @@ class PolicyConfig(BaseModel):
             "unknown": "allow",
         }
     )
-    # 부작용 분류와 무관하게 막을 도구 (노출 이름 기준)
+    # 부작용 분류와 무관하게 막을 도구 / 확인받을 도구 (노출 이름 기준). deny 가 우선
     deny_tools: List[str] = Field(default_factory=list)
+    confirm_tools: List[str] = Field(default_factory=list)
+    # confirm 대상인데 클라이언트가 elicitation 을 지원하지 않을 때
+    confirm_fallback: Literal["allow", "deny"] = "deny"
     # 부작용 분류별 기본 타임아웃(초)
     timeouts: Dict[str, float] = Field(
         default_factory=lambda: {
@@ -71,6 +75,8 @@ class PolicyConfig(BaseModel):
     def action_for(self, tool_name: str, side_effect: str) -> PolicyAction:
         if tool_name in self.deny_tools:
             return "deny"
+        if tool_name in self.confirm_tools:
+            return "confirm"
         return self.side_effects.get(side_effect, "allow")
 
     def timeout_for(self, tool_name: str, side_effect: str) -> Optional[float]:

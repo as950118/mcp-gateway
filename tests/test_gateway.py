@@ -1,7 +1,9 @@
+import asyncio
 import json
 
 import pytest
 from fastmcp import Client
+from fastmcp.client.elicitation import ElicitResult
 from fastmcp.exceptions import ToolError
 
 
@@ -148,3 +150,60 @@ async def test_check_warnings(make_gateway):
     await state.ensure_fresh(force=True)
     assert any("unregistered_tool" in w for w in state.warnings)
     assert any("only_in_registry" in w for w in state.warnings)
+
+
+def _elicit_handler(action: str, seen: list):
+    async def handler(message, response_type, params, context):
+        seen.append(message)
+        if action == "accept":
+            return {}
+        return ElicitResult(action=action)
+
+    return handler
+
+
+async def test_confirm_accepted_runs_tool(make_gateway):
+    gateway, state = make_gateway(policy={"side_effects": {"external": "confirm"}})
+    seen = []
+    async with Client(gateway, elicitation_handler=_elicit_handler("accept", seen)) as client:
+        result = await client.call_tool("create_pull_request", {"title": "x", "app_password": "s3cret"})
+    assert result.data == "PR created: x"
+    # 확인 메시지에 도구·인자가 들어가고 비밀값은 가린다
+    assert "create_pull_request" in seen[0] and "***" in seen[0] and "s3cret" not in seen[0]
+    record = _audit(state)[0]
+    assert (record["outcome"], record["confirm"]) == ("ok", "accept")
+
+
+@pytest.mark.parametrize("action", ["decline", "cancel"])
+async def test_confirm_declined_blocks_tool(make_gateway, action):
+    gateway, state = make_gateway(policy={"confirm_tools": ["create_pull_request"]})
+    async with Client(gateway, elicitation_handler=_elicit_handler(action, [])) as client:
+        with pytest.raises(ToolError, match="승인하지 않았습니다"):
+            await client.call_tool("create_pull_request", {"title": "x"})
+    record = _audit(state)[0]
+    assert (record["outcome"], record["confirm"]) == ("denied", action)
+
+
+async def test_confirm_without_elicitation_support_uses_fallback(make_gateway):
+    # elicitation_handler 가 없는 클라이언트는 elicitation capability 를 광고하지 않는다
+    gateway, state = make_gateway(policy={"confirm_tools": ["create_pull_request"]})
+    async with Client(gateway) as client:
+        with pytest.raises(ToolError, match="지원하지 않아"):
+            await client.call_tool("create_pull_request", {"title": "x"})
+    assert _audit(state)[0]["confirm"] == "fallback_deny"
+
+    gateway, state = make_gateway(policy={"confirm_tools": ["create_pull_request"], "confirm_fallback": "allow"})
+    async with Client(gateway) as client:
+        result = await client.call_tool("create_pull_request", {"title": "y"})
+    assert result.data == "PR created: y"
+
+
+async def test_confirm_wait_not_counted_in_timeout(make_gateway):
+    async def slow_accept(message, response_type, params, context):
+        await asyncio.sleep(0.5)
+        return {}
+
+    gateway, _ = make_gateway(policy={"confirm_tools": ["get_pod_logs"], "tool_timeouts": {"get_pod_logs": 0.3}})
+    async with Client(gateway, elicitation_handler=slow_accept) as client:
+        result = await client.call_tool("get_pod_logs", {})
+    assert result.data == "logs of api"

@@ -61,7 +61,22 @@ Cursor `mcp.json` 예시:
 - `exposure.mode`
   - `all` (기본): 모든 도구를 그대로 노출하고 `search_tools`·`activate_tools` 를 더한다. 기존 동작과 같다.
   - `dynamic`: `core: true` 도구와 메타 도구만 노출한다. `activate_tools` 로 켠 도구는 **그 세션에만** 노출되고 `notifications/tools/list_changed` 를 보낸다. 클라이언트가 이 알림을 지원해야 한다.
-- `policy`: `side_effects`(분류별 allow/deny), `deny_tools`, `timeouts`(분류별 초), `tool_timeouts`
+- `policy`
+  - `side_effects`: 분류별 `allow` / `deny` / `confirm`
+  - `deny_tools`, `confirm_tools`: 도구별 지정 (`deny` 가 우선)
+  - `confirm_fallback`: confirm 대상인데 클라이언트가 elicitation 을 지원하지 않을 때 `deny`(기본) / `allow`
+  - `timeouts`(분류별 초), `tool_timeouts`. 사용자 확인을 기다리는 시간은 타임아웃에 넣지 않는다
+
+### 실행 전 확인 (`confirm`)
+
+`confirm` 대상 도구를 호출하면 게이트웨이가 MCP elicitation 으로 "실행할까요?" 를 묻는다 (도구 이름, 부작용 분류, 비밀값을 가린 인자 포함).
+승인하면 실행하고, 거절·취소하면 차단한다. 감사 로그 `confirm` 필드에 `accept` / `decline` / `cancel` / `fallback_allow` / `fallback_deny` 가 남는다.
+
+```yaml
+policy:
+  side_effects: {external: confirm}     # 예: PR 생성처럼 외부 상태를 바꾸는 도구는 확인받기
+  confirm_tools: [some_exec_tool]       # 도구 단위로도 지정 가능
+```
 - `audit.path`: JSON Lines 감사 로그. `password`·`token`·`secret` 등이 들어간 인자 키는 `***` 로 가린다
 - `registry_ttl_s`: upstream 도구 목록을 다시 읽는 주기
 
@@ -125,6 +140,10 @@ Cursor `mcp.json` 예시:
   - `activate_tools` 를 호출하면 `tools/list_changed` 가 수신되고 6개로 늘어난다.
   - 활성화하지 않은 도구를 호출하면 `hidden` 으로 거부된다.
 - 정책 E2E: `deny_tools` 에 넣은 도구 호출이 차단되고 감사 로그에 `denied` 로 남는다.
+- 타임아웃 E2E (2026-10-14): 실제 upstream 호출이 제한 시간을 넘기면 중단되고(`timeout`), 이어진 다른 호출도 정상 처리된다. upstream 로그에 에러 없음.
+- **Claude Code (2.1.296) dynamic 모드 (2026-10-14)**: `claude -p --strict-mcp-config` 로 stdio 연결.
+  - 시작 시 도구 4개가 노출되고 활성화 대상 도구는 목록에 없다.
+  - `search_tools` → `activate_tools` 후 Claude Code 가 목록을 다시 받아 새 도구를 로드하고 호출에 성공한다 (감사 로그 `ok`, `hidden` 아님).
 - 감사 로그 `tool_error`: satc-mcp-server 는 실패를 MCP 에러가 아니라 `{"status":"error"}` 정상 응답으로 돌려준다. 게이트웨이는 응답을 그대로 전달하고, 감사 로그에만 `tool_error` 로 기록한다 (DB 미연결 상태에서 확인).
 - 도구 목록 크기 (JSON 문자 수)
 
@@ -133,20 +152,19 @@ Cursor `mcp.json` 예시:
   | upstream 직접 | 28 | 18,447 |
   | gateway all | 30 | 21,299 |
   | gateway dynamic | 4 | 2,824 (upstream 대비 약 85% 감소) |
-- 단위 테스트 18개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·타임아웃·감사·세션 분리·prefix 를 검증한다. 정책 차단과 노출 필터를 일부러 끄면 5개가 실패하는 것도 확인했다.
+- 단위 테스트 23개 (`uv run pytest`): 메모리 upstream 으로 노출·정책·확인(승인/거절/취소/미지원 fallback)·타임아웃·감사·세션 분리·prefix 를 검증한다. 정책 차단·노출 필터·확인 절차를 일부러 끄면 해당 테스트가 실패하는 것도 확인했다.
 
 **부분 실증**
-- 타임아웃: 단위 테스트(메모리 upstream)로만 확인했다. 실제 upstream 의 느린 호출이 중단되는지는 확인하지 않았다.
+- Claude Code `confirm` (2026-10-14): Claude Code 는 elicitation 지원을 광고하고, 게이트웨이의 확인 요청을 받는다. headless(`-p`) 에서는 응답할 사람이 없어 `cancel` 로 돌아오고 도구는 실행되지 않는다 (안전하게 실패). 대화형 세션에서 사용자가 승인하는 흐름은 아직 확인하지 않았다.
 - 여러 upstream + prefix: 단위 테스트로만 확인했다. 실제 upstream 은 하나뿐이다.
 
 **미검증**
-- Cursor·Claude Code 가 `tools/list_changed` 를 받고 도구 목록을 갱신하는지 (dynamic 모드의 전제). 실제 클라이언트에서 확인해야 한다.
+- Cursor 의 `tools/list_changed`·elicitation 지원. Cursor 를 쓰는 환경이면 dynamic·confirm 을 켜기 전에 확인한다.
 - `exec`·`external`·`write` 도구를 게이트웨이를 거쳐 실제로 실행하는 것. 부작용이 있어 E2E 대상에서 뺐다.
 - 운영 배포 (Docker, 인증). 게이트웨이 자체에는 아직 인증이 없다.
 
 ## 다음 단계 후보
 
-- 실제 클라이언트에서 dynamic 모드 확인. 지원하지 않으면 `all` 모드를 유지한다.
+- Cursor 에서 dynamic 모드·confirm 확인. Claude Code 대화형 세션에서 confirm 승인 흐름 확인.
 - 감사 로그로 도구 사용 빈도와 실패율을 본다. `core` 선정과 레지스트리 보강의 근거로 쓴다.
 - 도구가 50개를 넘거나 여러 서버를 묶으면, 별도 문서 검색 서비스의 하이브리드 색인(BM25 + 임베딩, RRF)을 쓰는 `ToolSearcher` 구현을 추가한다.
-- write/exec/external 도구에 확인 절차를 둘지 검토한다 (MCP elicitation, 클라이언트 지원 확인 필요).
